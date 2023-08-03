@@ -1,0 +1,53 @@
+plugins {
+	id 'java'
+	id 'org.springframework.boot' version '3.1.2'
+	id 'io.spring.dependency-management' version '1.1.2'
+}
+
+group = 'com.lgcns.dna.http3'
+version = '0.0.1-SNAPSHOT'
+
+java {
+	sourceCompatibility = '17'
+}
+
+configurations.all {
+	exclude group: "org.eclipse.jetty", module: "jetty-slf4j-impl"
+}
+
+configurations {
+	compileOnly {
+		extendsFrom annotationProcessor
+	}
+}
+
+repositories {
+	mavenCentral()
+}
+
+ext {
+	set('springShellVersion', "3.1.3")
+}
+
+dependencies {
+	implementation 'org.springframework.shell:spring-shell-starter'
+	implementation 'org.eclipse.jetty:jetty-util:11.0.15'
+	implementation 'org.eclipse.jetty.http2:http2-client:11.0.15'
+	implementation 'org.eclipse.jetty.http2:http2-http-client-transport:11.0.15'
+	implementation 'org.eclipse.jetty.http3:http3-client:11.0.15'
+	implementation 'org.eclipse.jetty.http3:http3-http-client-transport:11.0.15'
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	compileOnly 'org.projectlombok:lombok'
+	annotationProcessor 'org.projectlombok:lombok'
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}
+
+dependencyManagement {
+	imports {
+		mavenBom "org.springframework.shell:spring-shell-dependencies:${springShellVersion}"
+	}
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}
