@@ -1,96 +1,89 @@
 package com.lgcns.dna.http3.client.util;
 
-import java.lang.System.Logger.Level;
-import java.net.InetSocketAddress;
-import java.net.SocketAddress;
-import java.util.concurrent.CompletableFuture;
+import java.io.InputStream;
+import java.math.BigInteger;
+import java.nio.file.Paths;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.text.NumberFormat;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.jetty.client.HttpClient;
-import org.eclipse.jetty.client.api.ContentResponse;
+import org.eclipse.jetty.client.api.Request;
+import org.eclipse.jetty.client.api.Response;
 import org.eclipse.jetty.client.dynamic.HttpClientTransportDynamic;
-import org.eclipse.jetty.http.HttpFields;
+import org.eclipse.jetty.client.util.InputStreamResponseListener;
 import org.eclipse.jetty.http.HttpHeader;
-import org.eclipse.jetty.http.HttpURI;
-import org.eclipse.jetty.http.HttpVersion;
-import org.eclipse.jetty.http.MetaData;
-import org.eclipse.jetty.http2.api.Session;
-import org.eclipse.jetty.http2.api.Stream;
-import org.eclipse.jetty.http2.api.server.ServerSessionListener;
+import org.eclipse.jetty.http.HttpMethod;
 import org.eclipse.jetty.http2.client.HTTP2Client;
-import org.eclipse.jetty.http2.frames.DataFrame;
-import org.eclipse.jetty.http2.frames.HeadersFrame;
+import org.eclipse.jetty.http2.client.http.ClientConnectionFactoryOverHTTP2;
 import org.eclipse.jetty.http3.client.HTTP3Client;
 import org.eclipse.jetty.http3.client.http.ClientConnectionFactoryOverHTTP3;
-import org.eclipse.jetty.util.Callback;
-import org.eclipse.jetty.util.FuturePromise;
-import org.eclipse.jetty.util.Jetty;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 
 public class HttpUtil {
   public static void downloadChunk() throws Exception {
-    long startTime = System.nanoTime();
+    long start = System.currentTimeMillis();
 
     // Create and start HTTP2Client.
-    HTTP2Client client = new HTTP2Client();
-    SslContextFactory sslContextFactory = new SslContextFactory.Client(true);
-    client.addBean(sslContextFactory);
-    client.start();
+    HTTP2Client http2Client = new HTTP2Client();
+    ClientConnectionFactoryOverHTTP2.HTTP2 http2 = new ClientConnectionFactoryOverHTTP2.HTTP2(http2Client);
+    HttpClientTransportDynamic httpClientTransportDynamic = new HttpClientTransportDynamic(http2);
+    httpClientTransportDynamic.getClientConnector().setSslContextFactory(new SslContextFactory.Client(true));
+    HttpClient httpClient = new HttpClient(httpClientTransportDynamic);
+    httpClient.getSslContextFactory();
+    httpClient.start();
 
-    // Connect to host.
-    String host = "localhost";
-    int port = 8443;
+    InputStreamResponseListener listener = new InputStreamResponseListener();
+    Request request = httpClient.newRequest("https://localhost:8443/files/download-chunk").method(HttpMethod.POST);
+    request.headers(headers -> {
+      headers.put(HttpHeader.USER_AGENT, "Jetty HTTP2Client 11.0.15");
+      headers.put(HttpHeader.CONTENT_TYPE, "application/octet-stream");
+    })
+    .send(listener);
 
-    FuturePromise<Session> sessionPromise = new FuturePromise<>();
-    client.connect(sslContextFactory, new InetSocketAddress(host, port), new ServerSessionListener.Adapter(), sessionPromise);
+    Response response =  listener.get(30, TimeUnit.SECONDS);
+    if (response.getStatus() == 200)
+    {
+      byte[] buff;
 
-    // Obtain the client Session object.
-    Session session = sessionPromise.get(5, TimeUnit.SECONDS);
-
-    // Prepare the HTTP request headers.
-    HttpFields.Mutable requestFields = HttpFields.build();
-    requestFields.put("User-Agent", client.getClass().getName() + "/" + Jetty.VERSION);
-    // Prepare the HTTP request object.
-    MetaData.Request request = new MetaData.Request("GET", HttpURI.build("https://" + host + ":" + port + "/files/csv"),
-        HttpVersion.HTTP_2, requestFields);
-
-        
-    // Create the HTTP/2 HEADERS frame representing the HTTP request.
-    HeadersFrame headersFrame = new HeadersFrame(request, null, true);
-
-
-    // Prepare the listener to receive the HTTP response frames.
-    Stream.Listener responseListener = new Stream.Listener.Adapter() {
-      @Override
-      public void onData(Stream stream, DataFrame frame, Callback callback) {
-        byte[] bytes = new byte[frame.getData().remaining()];
-        frame.getData().get(bytes);
-        int duration = (int) TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - startTime);
-        System.out.println("After " + duration + " seconds: " + new String(bytes));
-        callback.succeeded();
+      try (InputStream input = listener.getInputStream())
+      {
+        buff = input.readAllBytes();
       }
-    };
 
-    session.newStream(headersFrame, new FuturePromise<>(), responseListener);
-    // session.newStream(headersFrame, new FuturePromise<>(), responseListener);
-    // session.newStream(headersFrame, new FuturePromise<>(), responseListener);
+      // sha512
+      MessageDigest digest;
 
-    Thread.sleep(TimeUnit.SECONDS.toMillis(20));
+      try {
+        digest = MessageDigest.getInstance("SHA-512");
+        digest.reset();
+        digest.update(buff);
+        System.out.println(response.getHeaders().get("XX-CHUNK-CHECKSUM") + ", " + String.format("%0128x", new BigInteger(1, digest.digest())));
+      } catch (NoSuchAlgorithmException e) {
+        e.printStackTrace();
+      }
 
-    client.stop();
+      NumberFormat formatter = NumberFormat.getNumberInstance();
+      long timeElapsed = System.currentTimeMillis() - start;
+      System.out.println("[Download Chunk:" + response.getStatus() + "] " + formatter.format(timeElapsed) + ", " + buff.length);
+    } else {
+      NumberFormat formatter = NumberFormat.getNumberInstance();
+      long timeElapsed = System.currentTimeMillis() - start;
+      System.out.println("[Download Chunk:" + response.getStatus() + "] " + formatter.format(timeElapsed));    
+    }
+    
+    httpClient.stop();
   }
 
   public static void downloadChunkByHttp3() throws Exception {
-    // Connect to host.
-    String host = "localhost";
-    int port = 8444;
+    long start = System.currentTimeMillis();
 
     SslContextFactory sslContextFactory = new SslContextFactory.Client(true);
 
     HTTP3Client http3Client = new HTTP3Client();
     http3Client.addBean(sslContextFactory);
     http3Client.getHTTP3Configuration().setStreamIdleTimeout(15000);
-    // http3Client.getClientConnector().setSslContextFactory(sslContextFactory);
     http3Client.getQuicConfiguration().setVerifyPeerCertificates(false);
 
     ClientConnectionFactoryOverHTTP3.HTTP3 http3 = new ClientConnectionFactoryOverHTTP3.HTTP3(http3Client);
@@ -98,9 +91,48 @@ public class HttpUtil {
     HttpClient httpClient = new HttpClient(httpClientTransportDynamic);
     httpClient.start();
 
-    ContentResponse response = httpClient.GET("https://localhost:8444/files/csv");
-    System.out.println(response.getContentAsString());
+    // ContentResponse response = httpClient.POST("https://localhost:8444/files/download-chunk");
+    InputStreamResponseListener listener = new InputStreamResponseListener();
+    Request request = httpClient.newRequest("https://localhost:8444/files/download-chunk").method(HttpMethod.POST);
+    request.headers(headers -> {
+      headers.put(HttpHeader.USER_AGENT, "Jetty HTTP3Client 11.0.15");
+      headers.put(HttpHeader.CONTENT_TYPE, "application/octet-stream");
+    })
+    .send(listener);
 
+    Response response =  listener.get(10, TimeUnit.MINUTES);
+    // ContentResponse contentRes = request.send();
+
+    if (response.getStatus() == 200)
+    {
+      byte[] buff;
+
+      try (InputStream input = listener.getInputStream())
+      {
+        buff = input.readAllBytes();
+      }
+
+      // sha512
+      MessageDigest digest;
+
+      try {
+        digest = MessageDigest.getInstance("SHA-512");
+        digest.reset();
+        digest.update(buff);
+        System.out.println(response.getHeaders().get("XX-CHUNK-CHECKSUM") + ", " + String.format("%0128x", new BigInteger(1, digest.digest())));
+      } catch (NoSuchAlgorithmException e) {
+        e.printStackTrace();
+      }
+
+      NumberFormat formatter = NumberFormat.getNumberInstance();
+      long timeElapsed = System.currentTimeMillis() - start;
+      System.out.println("[Download Chunk3:" + response.getStatus() + "] " + formatter.format(timeElapsed) + ", " + buff.length);
+    } else {
+      NumberFormat formatter = NumberFormat.getNumberInstance();
+      long timeElapsed = System.currentTimeMillis() - start;
+      System.out.println("[Download Chunk3:" + response.getStatus() + "] " + formatter.format(timeElapsed));    
+    }
+    
     httpClient.stop();    
 
     // SocketAddress serverAddress = new InetSocketAddress(host, port);

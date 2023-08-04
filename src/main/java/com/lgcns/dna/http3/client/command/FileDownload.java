@@ -8,13 +8,13 @@ import com.lgcns.dna.http3.client.util.HttpUtil;
 @ShellComponent
 public class FileDownload {
   @ShellMethod(key = "download")
-  public String upload() throws Exception {
+  public String download() throws Exception {
     HttpUtil.downloadChunk();
     return "done";
   }
 
   @ShellMethod(key = "download3")
-  public String upload3() throws Exception {
+  public String download3() throws Exception {
     HttpUtil.downloadChunkByHttp3();
     return "done";
   }
