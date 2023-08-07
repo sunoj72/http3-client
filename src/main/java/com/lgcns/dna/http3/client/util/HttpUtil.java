@@ -2,16 +2,18 @@ package com.lgcns.dna.http3.client.util;
 
 import java.io.InputStream;
 import java.math.BigInteger;
-import java.nio.file.Paths;
+import java.nio.ByteBuffer;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.text.NumberFormat;
+import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.jetty.client.HttpClient;
 import org.eclipse.jetty.client.api.Request;
 import org.eclipse.jetty.client.api.Response;
 import org.eclipse.jetty.client.dynamic.HttpClientTransportDynamic;
+import org.eclipse.jetty.client.util.ByteBufferRequestContent;
 import org.eclipse.jetty.client.util.InputStreamResponseListener;
 import org.eclipse.jetty.http.HttpHeader;
 import org.eclipse.jetty.http.HttpMethod;
@@ -20,6 +22,8 @@ import org.eclipse.jetty.http2.client.http.ClientConnectionFactoryOverHTTP2;
 import org.eclipse.jetty.http3.client.HTTP3Client;
 import org.eclipse.jetty.http3.client.http.ClientConnectionFactoryOverHTTP3;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
+
+import com.fasterxml.jackson.core.util.ByteArrayBuilder;
 
 public class HttpUtil {
   public static void downloadChunk() throws Exception {
@@ -52,21 +56,13 @@ public class HttpUtil {
         buff = input.readAllBytes();
       }
 
-      // sha512
-      MessageDigest digest;
-
-      try {
-        digest = MessageDigest.getInstance("SHA-512");
-        digest.reset();
-        digest.update(buff);
-        System.out.println(response.getHeaders().get("XX-CHUNK-CHECKSUM") + ", " + String.format("%0128x", new BigInteger(1, digest.digest())));
-      } catch (NoSuchAlgorithmException e) {
-        e.printStackTrace();
-      }
-
       NumberFormat formatter = NumberFormat.getNumberInstance();
+
+      System.out.println("[Chunk Checksums] " + response.getHeaders().get("X-DNA-CHUNK-CHECKSUM") + ", " + createChecksum(buff));
+      System.out.println("[Chunk Sizes] " + response.getHeaders().get("X-DNA-CHUNK-SIZE") + ", " +  formatter.format(buff.length));
+
       long timeElapsed = System.currentTimeMillis() - start;
-      System.out.println("[Download Chunk:" + response.getStatus() + "] " + formatter.format(timeElapsed) + ", " + buff.length);
+      System.out.println("[Download Chunk:" + response.getStatus() + "] " + formatter.format(timeElapsed) + ", " + formatter.format(buff.length));
     } else {
       NumberFormat formatter = NumberFormat.getNumberInstance();
       long timeElapsed = System.currentTimeMillis() - start;
@@ -91,7 +87,6 @@ public class HttpUtil {
     HttpClient httpClient = new HttpClient(httpClientTransportDynamic);
     httpClient.start();
 
-    // ContentResponse response = httpClient.POST("https://localhost:8444/files/download-chunk");
     InputStreamResponseListener listener = new InputStreamResponseListener();
     Request request = httpClient.newRequest("https://localhost:8444/files/download-chunk").method(HttpMethod.POST);
     request.headers(headers -> {
@@ -112,21 +107,13 @@ public class HttpUtil {
         buff = input.readAllBytes();
       }
 
-      // sha512
-      MessageDigest digest;
-
-      try {
-        digest = MessageDigest.getInstance("SHA-512");
-        digest.reset();
-        digest.update(buff);
-        System.out.println(response.getHeaders().get("XX-CHUNK-CHECKSUM") + ", " + String.format("%0128x", new BigInteger(1, digest.digest())));
-      } catch (NoSuchAlgorithmException e) {
-        e.printStackTrace();
-      }
-
       NumberFormat formatter = NumberFormat.getNumberInstance();
+
+      System.out.println("[Chunk Checksums] " + response.getHeaders().get("X-DNA-CHUNK-CHECKSUM") + ", " + createChecksum(buff));
+      System.out.println("[Chunk Sizes] " + response.getHeaders().get("X-DNA-CHUNK-SIZE") + ", " +  formatter.format(buff.length));
+
       long timeElapsed = System.currentTimeMillis() - start;
-      System.out.println("[Download Chunk3:" + response.getStatus() + "] " + formatter.format(timeElapsed) + ", " + buff.length);
+      System.out.println("[Download Chunk3:" + response.getStatus() + "] " + formatter.format(timeElapsed) + ", " + formatter.format(buff.length));
     } else {
       NumberFormat formatter = NumberFormat.getNumberInstance();
       long timeElapsed = System.currentTimeMillis() - start;
@@ -187,6 +174,54 @@ public class HttpUtil {
     // });
   }
 
+  public static void uploadChunk() throws Exception {
+    HTTP2Client http2Client = new HTTP2Client();
+    ClientConnectionFactoryOverHTTP2.HTTP2 http2 = new ClientConnectionFactoryOverHTTP2.HTTP2(http2Client);
+    HttpClientTransportDynamic httpClientTransportDynamic = new HttpClientTransportDynamic(http2);
+    httpClientTransportDynamic.getClientConnector().setSslContextFactory(new SslContextFactory.Client(true));
+
+    HttpClient httpClient = new HttpClient(httpClientTransportDynamic);
+    httpClient.start();
+
+    byte[] buff = generateRandomByteArray(10 * 1024 * 1024);
+
+    Request request = httpClient.newRequest("https://localhost:8443/files/upload-chunk")
+      .method(HttpMethod.POST)
+      .agent("Jetty HTTP2Client 11.0.15")
+      .headers(headers -> {
+        headers.put(HttpHeader.CONTENT_TYPE, "application/octet-stream");
+        headers.put("X-DNA-CHUNK-CHECKSUM", createChecksum(buff));
+        headers.put("X-DNA-CHUNK-SIZE", Integer.toString(buff.length));
+      });
+
+    request.body(new ByteBufferRequestContent(ByteBuffer.wrap(buff)));
+    request.send();
+
+    httpClient.stop();
+  }
+
+  private static byte[] generateRandomByteArray(int size) {
+    byte[] byteArray = new byte[size];
+    new Random().nextBytes(byteArray);
+    return byteArray;
+  }
+
+  private static String createChecksum(byte[] buff) {
+    MessageDigest digest;
+    String result="";
+
+    try {
+      digest = MessageDigest.getInstance("SHA-512");
+      digest.reset();
+      digest.update(buff);
+      result = String.format("%0128x", new BigInteger(1, digest.digest()));
+    } catch (NoSuchAlgorithmException e) {
+      e.printStackTrace();
+    }
+
+    return result;
+  }
+    
   // public static HttpClient createHttpClient() throws SSLException {
   //   // Configure TLS if needed
   //   SslContextFactory sslContextFactory = new SslContextFactory.Client();

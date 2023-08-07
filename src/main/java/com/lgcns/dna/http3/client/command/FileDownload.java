@@ -10,12 +10,14 @@ public class FileDownload {
   @ShellMethod(key = "download")
   public String download() throws Exception {
     HttpUtil.downloadChunk();
-    return "done";
+
+    return "Download complete using HTTP/2";
   }
 
   @ShellMethod(key = "download3")
   public String download3() throws Exception {
     HttpUtil.downloadChunkByHttp3();
-    return "done";
+
+    return "Download complete using HTTP/3";
   }
 }
