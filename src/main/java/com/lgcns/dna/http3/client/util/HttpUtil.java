@@ -23,8 +23,6 @@ import org.eclipse.jetty.http3.client.HTTP3Client;
 import org.eclipse.jetty.http3.client.http.ClientConnectionFactoryOverHTTP3;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 
-import com.fasterxml.jackson.core.util.ByteArrayBuilder;
-
 public class HttpUtil {
   public static void downloadChunk() throws Exception {
     long start = System.currentTimeMillis();
