@@ -2,25 +2,37 @@ package com.lgcns.dna.http3.client.util;
 
 import java.io.InputStream;
 import java.math.BigInteger;
+import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.text.NumberFormat;
 import java.util.Random;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.jetty.client.HttpClient;
 import org.eclipse.jetty.client.api.Request;
 import org.eclipse.jetty.client.api.Response;
+import org.eclipse.jetty.client.api.Result;
 import org.eclipse.jetty.client.dynamic.HttpClientTransportDynamic;
+import org.eclipse.jetty.client.util.BufferingResponseListener;
 import org.eclipse.jetty.client.util.ByteBufferRequestContent;
 import org.eclipse.jetty.client.util.InputStreamResponseListener;
+import org.eclipse.jetty.http.HttpFields;
 import org.eclipse.jetty.http.HttpHeader;
 import org.eclipse.jetty.http.HttpMethod;
+import org.eclipse.jetty.http.HttpURI;
+import org.eclipse.jetty.http.HttpVersion;
+import org.eclipse.jetty.http.MetaData;
 import org.eclipse.jetty.http2.client.HTTP2Client;
 import org.eclipse.jetty.http2.client.http.ClientConnectionFactoryOverHTTP2;
+import org.eclipse.jetty.http3.api.Session;
+import org.eclipse.jetty.http3.api.Stream;
 import org.eclipse.jetty.http3.client.HTTP3Client;
 import org.eclipse.jetty.http3.client.http.ClientConnectionFactoryOverHTTP3;
+import org.eclipse.jetty.http3.frames.HeadersFrame;
+import org.eclipse.jetty.util.Jetty;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 
 public class HttpUtil {
@@ -70,6 +82,75 @@ public class HttpUtil {
     httpClient.stop();
   }
 
+  public static void downloadChunkAsync() throws Exception {
+    long start = System.currentTimeMillis();
+
+    // Create and start HTTP2Client.
+    HTTP2Client http2Client = new HTTP2Client();
+    ClientConnectionFactoryOverHTTP2.HTTP2 http2 = new ClientConnectionFactoryOverHTTP2.HTTP2(http2Client);
+    HttpClientTransportDynamic httpClientTransportDynamic = new HttpClientTransportDynamic(http2);
+    httpClientTransportDynamic.getClientConnector().setSslContextFactory(new SslContextFactory.Client(true));
+    HttpClient httpClient = new HttpClient(httpClientTransportDynamic);
+    httpClient.getSslContextFactory();
+    // httpClient.setMaxConnectionsPerDestination(1000);
+    httpClient.start();
+
+    try {
+      CountDownLatch requestLatch = new CountDownLatch(1);
+
+      // BufferingResponseListener listener = new BufferingResponseListener(12*1024*1024) {
+      //   long totalBytes = 0;
+
+      //   @Override
+      //   public void onContent(Response response, ByteBuffer content) {
+      //     requestLatch.countDown();
+      //     long remain = content.remaining();
+      //     totalBytes += remain;
+
+      //     System.out.println("[Download Chunk:onContent] " + remain + "," + totalBytes);
+
+      //   }
+
+      //   @Override
+      //   public void onComplete(Result result) {
+      //     NumberFormat formatter = NumberFormat.getNumberInstance();
+      //     requestLatch.countDown();
+
+      //     System.out.println("[Chunk Checksums] " + result.getResponse().getHeaders().get("X-DNA-CHUNK-CHECKSUM"));
+
+      //     long timeElapsed = System.currentTimeMillis() - start;
+      //     System.out.println("[Download Chunk:" + result.getResponse().getStatus() + "] " + formatter.format(timeElapsed) + ", " + formatter.format(totalBytes));
+      //   }
+
+      //   @Override
+      //   public void onFailure(Response response, Throwable failure) {
+      //     requestLatch.countDown();
+      //     failure.printStackTrace();
+      //   }
+      // };
+
+      Request request = httpClient.newRequest("https://localhost:8443/files/download-chunk")
+        .method(HttpMethod.POST)
+        .onResponseContentAsync((response, content, callback) ->
+        {
+            requestLatch.incrementAndGet();
+            callbackRef.set(callback);
+            requestLatch.countDown();
+        });
+      request.headers(headers -> {
+        headers.put(HttpHeader.USER_AGENT, "Jetty HTTP2Client 11.0.15");
+        headers.put(HttpHeader.CONTENT_TYPE, "application/octet-stream");
+      })
+      .send(listener);
+      
+      requestLatch.await();
+
+    } finally {
+      httpClient.stop();
+    }
+
+  }
+
   public static void downloadChunkByHttp3() throws Exception {
     long start = System.currentTimeMillis();
 
@@ -83,6 +164,7 @@ public class HttpUtil {
     ClientConnectionFactoryOverHTTP3.HTTP3 http3 = new ClientConnectionFactoryOverHTTP3.HTTP3(http3Client);
     HttpClientTransportDynamic httpClientTransportDynamic = new HttpClientTransportDynamic(http3);
     HttpClient httpClient = new HttpClient(httpClientTransportDynamic);
+    httpClient.setMaxConnectionsPerDestination(1000);
     httpClient.start();
 
     InputStreamResponseListener listener = new InputStreamResponseListener();
@@ -94,8 +176,6 @@ public class HttpUtil {
     .send(listener);
 
     Response response =  listener.get(10, TimeUnit.MINUTES);
-    // ContentResponse contentRes = request.send();
-
     if (response.getStatus() == 200)
     {
       byte[] buff;
@@ -119,57 +199,112 @@ public class HttpUtil {
     }
     
     httpClient.stop();    
+  }
 
-    // SocketAddress serverAddress = new InetSocketAddress(host, port);
-    // // FuturePromise<org.eclipse.jetty.http3.api.Session> sessionPromise = new FuturePromise<>();
-    // CompletableFuture<org.eclipse.jetty.http3.api.Session.Client> sessionCF = http3Client.connect(serverAddress, new org.eclipse.jetty.http3.api.Session.Client.Listener() {});
-    // org.eclipse.jetty.http3.api.Session.Client session = sessionCF.get();
+  public static void downloadChunkByAsyncHttp3() throws Exception {
+    final long start = System.currentTimeMillis();
 
-    // // Configure the request headers.
-    // HttpFields requestHeaders = HttpFields.build()
-    //   .put(HttpHeader.USER_AGENT, "Jetty HTTP3Client 11.0.15");
+    SslContextFactory sslContextFactory = new SslContextFactory.Client(true);
 
-    // // The request metadata with method, URI and headers.
-    // MetaData.Request request = new MetaData.Request("GET", HttpURI.from("http://localhost:8444/files/csv"), HttpVersion.HTTP_3, requestHeaders);
+    HTTP3Client http3Client = new HTTP3Client();
+    http3Client.addBean(sslContextFactory);
+    http3Client.getHTTP3Configuration().setStreamIdleTimeout(15000);
+    http3Client.getQuicConfiguration().setVerifyPeerCertificates(false);
 
-    // // The HTTP/3 HEADERS frame, with endStream=true
-    // // to signal that this request has no content.
-    // org.eclipse.jetty.http3.frames.HeadersFrame headersFrame = new org.eclipse.jetty.http3.frames.HeadersFrame(request, true);
+    http3Client.start();
+    try {
+      CountDownLatch requestLatch = new CountDownLatch(1);
+      Session.Client session = http3Client.connect(new InetSocketAddress("localhost", 8444), new Session.Client.Listener() {})
+        .get(10, TimeUnit.SECONDS);
 
-    // // Open a Stream by sending the HEADERS frame.
-    // session.newRequest(headersFrame, new org.eclipse.jetty.http3.api.Stream.Client.Listener() {
-    //   @Override
-    //   public void onResponse(org.eclipse.jetty.http3.api.Stream.Client stream, org.eclipse.jetty.http3.frames.HeadersFrame frame)
-    //   {
-    //       MetaData metaData = frame.getMetaData();
-    //       MetaData.Response response = (MetaData.Response)metaData;
-    //       System.getLogger("http3").log(Level.INFO, "Received response {0}", response);
-    //   }
+      // Prepare the HTTP request headers.
+      HttpFields requestFields = HttpFields.build()
+        .put(HttpHeader.USER_AGENT, "Jetty HTTP3Client 11.0.15")
+        .put(HttpHeader.CONTENT_TYPE, "application/octet-stream");
 
-    //   @Override
-    //   public void onDataAvailable(org.eclipse.jetty.http3.api.Stream.Client stream)
-    //   {
-    //       // Read a chunk of the content.
-    //       org.eclipse.jetty.http3.api.Stream.Data data = stream.readData();
-    //       if (data == null)
-    //       {
-    //         // No data available now, demand to be called back.
-    //         stream.demand();
-    //       } else {
-    //         // Process the content.
-    //         System.getLogger("http3").log(Level.INFO, data.getByteBuffer().toString());
+      // Prepare the HTTP request object.
+      MetaData.Request request = new MetaData.Request("POST", HttpURI.from("https://localhost:8444/files/download-chunk"), HttpVersion.HTTP_3, requestFields);
 
-    //         // Notify the implementation that the content has been consumed.
-    //         data.complete();
+      // Create the HTTP/3 HEADERS frame representing the HTTP request.
+      HeadersFrame headersFrame = new HeadersFrame(request, true);
 
-    //         if (!data.isLast())
-    //         {
-    //           // Demand to be called back.
-    //           stream.demand();
-    //         }
-    //       }
-    //   }
-    // });
+      // Send the HEADERS frame to create a request stream.
+      // Stream stream = session.newRequest(headersFrame, new Stream.Client.Listener()
+      session.newRequest(headersFrame, new Stream.Client.Listener()
+      {
+        int statusCode = 0;
+        long totalBytes = 0;
+        String checksumHeader = "";
+
+        @Override
+        public void onResponse(Stream.Client stream, HeadersFrame frame)
+        {
+          // Inspect the response status and headers.
+          MetaData.Response response = (MetaData.Response)frame.getMetaData();
+          statusCode = response.getStatus();
+          checksumHeader = response.getFields().get("X-DNA-CHUNK-CHECKSUM");
+          System.out.println("[Download Chunk3:onResponse] (" + response.getStatus() + ") " + response.getContentLength() + " bytes");
+
+          if (frame.isLast()) {
+            requestLatch.countDown();
+            System.err.println("LAST RESPONSE HEADER = " + frame);
+            return;
+          }
+
+          // Demand for response content.
+          stream.demand();
+        }
+
+        @Override
+        public void onDataAvailable(Stream.Client stream)
+        {
+          Stream.Data data = stream.readData();
+          if (data != null)
+          {
+            // Process the response content chunk.
+            int remain = data.getByteBuffer().remaining();
+            totalBytes += remain;
+            // System.out.println("[Download Chunk3:onDataAvailable] " + remain + "," + totalBytes);
+
+            data.complete();
+            if (data.isLast()) {
+              requestLatch.countDown();
+
+              System.out.println("[Chunk Checksums] " + checksumHeader);
+              NumberFormat formatter = NumberFormat.getNumberInstance();
+              long timeElapsed = System.currentTimeMillis() - start;
+              System.out.println("[Download Chunk3:" + statusCode + "] " + formatter.format(timeElapsed) + ", " + formatter.format(totalBytes));
+              return;
+            }
+            }
+            // Demand for more response content.
+            stream.demand();
+        }
+
+        // @Override
+        // public void onTrailer(Stream.Client stream, HeadersFrame frame)
+        // {
+        //   System.err.println("RESPONSE TRAILER = " + frame);
+        //   requestLatch.countDown();
+        // }
+      });
+
+      requestLatch.await();
+
+      // // Use the Stream object to send request content, if any, using a DATA frame.
+      // ByteBuffer requestChunk1 = ...;
+      // stream.data(new DataFrame(requestChunk1, false))
+      //     // Subsequent sends must wait for previous sends to complete.
+      //     .thenCompose(s ->
+      //     {
+      //         ByteBuffer requestChunk2 = ...;
+      //         s.data(new DataFrame(requestChunk2, true)));
+      //     }
+
+    } finally {
+      http3Client.stop();
+    }
+
   }
 
   public static void uploadChunk() throws Exception {
